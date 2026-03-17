@@ -40,15 +40,18 @@ jobs:
           include_passed: true
 
       - name: Generate Allure Report
+        uses: simple-elf/allure-report-action@v1
         if: success() || failure()
-        run: mvn -B allure:report
+        with:
+          allure_results: lab2/target/allure-results
+          allure_report: allure-report
 
       - name: Upload Allure Report
         uses: actions/upload-artifact@v4
         if: success() || failure()
         with:
           name: allure-report
-          path: lab2/target/site/allure-maven-plugin/
+          path: allure-report/
           retention-days: 30
 
   publish-report:
