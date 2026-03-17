@@ -36,7 +36,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             selected=("${all_labs[@]}")
           else
-            changed_json='${{ steps.changed.outputs.all_changed_files }}'
+            changed_json="${{ steps.changed.outputs.all_changed_files }}"
             mapfile -t changed_labs < <(printf '%s' "$changed_json" | jq -r '.[]' | awk -F/ 'NF>0 && ($1 ~ /^lab/ || $1 ~ /^Lab/) { print $1 }' | sort -u)
 
             selected=()
