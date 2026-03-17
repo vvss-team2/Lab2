@@ -1,18 +1,95 @@
 name: JUnit
+
 on:
-  push
+  push:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  build:
-    name: Build and Run Tests
+  detect-labs:
+    name: Detect Changed Lab Projects
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_labs: ${{ steps.matrix.outputs.has_labs }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      - name: Build and Run Tests
-        run: mvn test
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v6
-        if: success() || failure() # always run even if the previous step fails
         with:
-          report_paths: '**/build/test-results/test/TEST-*.xml'
+          fetch-depth: 0
+
+      - name: Find Changed Files
+        id: changed
+        if: github.event_name != 'workflow_dispatch'
+        uses: tj-actions/changed-files@v45
+        with:
+          json: true
+
+      - name: Build Lab Matrix
+        id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t all_labs < <(find . -mindepth 1 -maxdepth 2 -type f \( -path './lab*/pom.xml' -o -path './Lab*/pom.xml' \) -printf '%h\n' | sed 's#^./##' | sort -u)
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            selected=("${all_labs[@]}")
+          else
+            changed_json='${{ steps.changed.outputs.all_changed_files }}'
+            mapfile -t changed_labs < <(printf '%s' "$changed_json" | jq -r '.[]' | awk -F/ 'NF>0 && ($1 ~ /^lab/ || $1 ~ /^Lab/) { print $1 }' | sort -u)
+
+            selected=()
+            for lab in "${all_labs[@]}"; do
+              for changed in "${changed_labs[@]}"; do
+                if [[ "$lab" == "$changed" || "$lab" == "$changed"/* ]]; then
+                  selected+=("$lab")
+                  break
+                fi
+              done
+            done
+          fi
+
+          if [[ ${#selected[@]} -eq 0 ]]; then
+            echo 'matrix={"lab":[]}' >> "$GITHUB_OUTPUT"
+            echo 'has_labs=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          matrix_json=$(printf '%s\n' "${selected[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0)) | {lab: .}')
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+          echo 'has_labs=true' >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and Run Tests
+    needs: detect-labs
+    if: needs.detect-labs.outputs.has_labs == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-labs.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.lab }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build and Run Tests
+        run: mvn -B test
+
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v5
+        if: success() || failure()
+        with:
+          check_name: Test Report - ${{ matrix.lab }}
+          report_paths: ${{ matrix.lab }}/target/surefire-reports/TEST-*.xml
+          detailed_summary: true
+          include_passed: true
